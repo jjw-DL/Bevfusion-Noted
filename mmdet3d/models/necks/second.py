@@ -27,9 +27,9 @@ class SECONDFPN(BaseModule):
 
     def __init__(
         self,
-        in_channels=[128, 128, 256],
-        out_channels=[256, 256, 256],
-        upsample_strides=[1, 2, 4],
+        in_channels=[128, 128, 256], # [128, 256]
+        out_channels=[256, 256, 256], # [256, 256]
+        upsample_strides=[1, 2, 4], # [1, 2]
         norm_cfg=dict(type="BN", eps=1e-3, momentum=0.01),
         upsample_cfg=dict(type="deconv", bias=False),
         conv_cfg=dict(type="Conv2d", bias=False),
@@ -40,27 +40,28 @@ class SECONDFPN(BaseModule):
         # cfg is dict(type='GN', num_groups=num_groups, eps=1e-3, affine=True)
         super(SECONDFPN, self).__init__(init_cfg=init_cfg)
         assert len(out_channels) == len(upsample_strides) == len(in_channels)
-        self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.in_channels = in_channels # [128, 256]
+        self.out_channels = out_channels # [256, 256]
         self.fp16_enabled = False
 
         deblocks = []
+        # 逐层构建
         for i, out_channel in enumerate(out_channels):
-            stride = upsample_strides[i]
+            stride = upsample_strides[i] # 1或2
             if stride > 1 or (stride == 1 and not use_conv_for_no_stride):
                 upsample_layer = build_upsample_layer(
                     upsample_cfg,
-                    in_channels=in_channels[i],
-                    out_channels=out_channel,
-                    kernel_size=upsample_strides[i],
-                    stride=upsample_strides[i],
+                    in_channels=in_channels[i], # [128, 256]
+                    out_channels=out_channel, # [256, 256]
+                    kernel_size=upsample_strides[i], # [1, 2]
+                    stride=upsample_strides[i], # [1, 2]
                 )
             else:
                 stride = np.round(1 / stride).astype(np.int64)
                 upsample_layer = build_conv_layer(
                     conv_cfg,
-                    in_channels=in_channels[i],
-                    out_channels=out_channel,
+                    in_channels=in_channels[i], # 128
+                    out_channels=out_channel, # 256
                     kernel_size=stride,
                     stride=stride,
                 )
@@ -96,4 +97,4 @@ class SECONDFPN(BaseModule):
             out = torch.cat(ups, dim=1)
         else:
             out = ups[0]
-        return [out]
+        return [out] # (2, 512, 180, 180)

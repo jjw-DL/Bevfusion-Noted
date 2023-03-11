@@ -26,27 +26,27 @@ class ImageAug3D:
     def __init__(
         self, final_dim, resize_lim, bot_pct_lim, rot_lim, rand_flip, is_train
     ):
-        self.final_dim = final_dim
-        self.resize_lim = resize_lim
-        self.bot_pct_lim = bot_pct_lim
-        self.rand_flip = rand_flip
-        self.rot_lim = rot_lim
-        self.is_train = is_train
+        self.final_dim = final_dim # [256, 704]
+        self.resize_lim = resize_lim # [0.48, 0.48]
+        self.bot_pct_lim = bot_pct_lim # [0, 0]
+        self.rand_flip = rand_flip # False
+        self.rot_lim = rot_lim # [0, 0]
+        self.is_train = is_train # True
 
     def sample_augmentation(self, results):
-        H, W, _, _ = results["ori_shape"]
-        fH, fW = self.final_dim
+        H, W, _, _ = results["ori_shape"] # 900, 1600
+        fH, fW = self.final_dim # [256, 704]
         if self.is_train:
-            resize = np.random.uniform(*self.resize_lim)
-            resize_dims = (int(W * resize), int(H * resize))
+            resize = np.random.uniform(*self.resize_lim) # 随机均匀分布eg:0.48
+            resize_dims = (int(W * resize), int(H * resize)) # (768, 432)
             newW, newH = resize_dims
-            crop_h = int((1 - np.random.uniform(*self.bot_pct_lim)) * newH) - fH
-            crop_w = int(np.random.uniform(0, max(0, newW - fW)))
-            crop = (crop_w, crop_h, crop_w + fW, crop_h + fH)
+            crop_h = int((1 - np.random.uniform(*self.bot_pct_lim)) * newH) - fH # 176
+            crop_w = int(np.random.uniform(0, max(0, newW - fW))) # 18
+            crop = (crop_w, crop_h, crop_w + fW, crop_h + fH) # (18, 176, 722, 423)
             flip = False
             if self.rand_flip and np.random.choice([0, 1]):
-                flip = True
-            rotate = np.random.uniform(*self.rot_lim)
+                flip = True # 0.5的概率决定是否翻转
+            rotate = np.random.uniform(*self.rot_lim) # 随机均匀分布 eg:0
         else:
             resize = np.mean(self.resize_lim)
             resize_dims = (int(W * resize), int(H * resize))
@@ -56,27 +56,28 @@ class ImageAug3D:
             crop = (crop_w, crop_h, crop_w + fW, crop_h + fH)
             flip = False
             rotate = 0
-        return resize, resize_dims, crop, flip, rotate
+        return resize, resize_dims, crop, flip, rotate # 返回的是增强的参数
 
     def img_transform(
         self, img, rotation, translation, resize, resize_dims, crop, flip, rotate
     ):
+        # 进行数据增强 --> 数据增强后的图片，旋转矩阵和平移向量
         # adjust image
-        img = Image.fromarray(img.astype(np.uint8))
-        img = img.resize(resize_dims)
-        img = img.crop(crop)
+        img = Image.fromarray(img.astype(np.uint8)) # 将图片转换为Image对象
+        img = img.resize(resize_dims) # 图像缩放 768, 423
+        img = img.crop(crop) # 图像裁剪 (704, 256)
         if flip:
             img = img.transpose(method=Image.FLIP_LEFT_RIGHT)
-        img = img.rotate(rotate)
+        img = img.rotate(rotate) # 图像旋转
         img = np.array(img).astype(np.float32)
 
         # post-homography transformation
-        rotation *= resize
-        translation -= torch.Tensor(crop[:2])
+        rotation *= resize # 2D旋转矩阵缩放 eg:[[1, 0], [0, 1]] --> [[0.2172, 0], [0, 0.2172]]
+        translation -= torch.Tensor(crop[:2]) # 2D平移向量 [0, 0] --> [0, -45]
         if flip:
             A = torch.Tensor([[-1, 0], [0, 1]])
-            b = torch.Tensor([crop[2] - crop[0], 0])
-            rotation = A.matmul(rotation)
+            b = torch.Tensor([crop[2] - crop[0], 0]) # 这里并不是旋转+平移而是将翻转变换转换成这种形式，方便处理
+            rotation = A.matmul(rotation) 
             translation = A.matmul(translation) + b
         theta = rotate / 180 * np.pi
         A = torch.Tensor(
@@ -84,22 +85,24 @@ class ImageAug3D:
                 [np.cos(theta), np.sin(theta)],
                 [-np.sin(theta), np.cos(theta)],
             ]
-        )
-        b = torch.Tensor([crop[2] - crop[0], crop[3] - crop[1]]) / 2
-        b = A.matmul(-b) + b
-        rotation = A.matmul(rotation)
-        translation = A.matmul(translation) + b
+        ) # 根据旋转角计算对应的旋转矩阵
+        b = torch.Tensor([crop[2] - crop[0], crop[3] - crop[1]]) / 2 # 裁剪宽度的一半，旋转中心点
+        b = A.matmul(-b) + b # 相当于先将坐标原点从左上角移动到图像中心，然后绕中心旋转
+        rotation = A.matmul(rotation) # 旋转矩阵(连乘即可)
+        translation = A.matmul(translation) + b # R1*T2+T1
 
-        return img, rotation, translation
+        return img, rotation, translation # 获取经过缩放，裁剪，翻转和旋转等变换后对应的旋转矩阵和平移向量
 
     def __call__(self, data: Dict[str, Any]) -> Dict[str, Any]:
         imgs = data["img"]
         new_imgs = []
         transforms = []
+        # 逐张图片处理
         for img in imgs:
             resize, resize_dims, crop, flip, rotate = self.sample_augmentation(data)
-            post_rot = torch.eye(2)
-            post_tran = torch.zeros(2)
+            post_rot = torch.eye(2) # 初始化旋转
+            post_tran = torch.zeros(2) # 初始化平移
+            # 进行数据增强 --> 数据增强后的图片，旋转矩阵和平移向量
             new_img, rotation, translation = self.img_transform(
                 img,
                 post_rot,
@@ -110,14 +113,14 @@ class ImageAug3D:
                 flip=flip,
                 rotate=rotate,
             )
-            transform = torch.eye(4)
-            transform[:2, :2] = rotation
-            transform[:2, 3] = translation
-            new_imgs.append(new_img)
-            transforms.append(transform.numpy())
-        data["img"] = new_imgs
+            transform = torch.eye(4) # 初始化变换矩阵
+            transform[:2, :2] = rotation # 2D-->3D的赋值，旋转 eg:[[0.48, 0],[0, 0.48]]
+            transform[:2, 3] = translation # 平移 eg:[-18, -176]
+            new_imgs.append(new_img) # 将变换后的图片加入list
+            transforms.append(transform.numpy()) # 将变换后的变换矩阵加入list
+        data["img"] = new_imgs # 保存增强变换后的图片 list
         # update the calibration matrices
-        data["img_aug_matrix"] = transforms
+        data["img_aug_matrix"] = transforms # 保存增强变换后的变换矩阵
         return data
 
 
@@ -170,14 +173,14 @@ class GridMask:
         prob=1.0,
         fixed_prob=False,
     ):
-        self.use_h = use_h
-        self.use_w = use_w
-        self.rotate = rotate
-        self.offset = offset
-        self.ratio = ratio
-        self.mode = mode
-        self.st_prob = prob
-        self.prob = prob
+        self.use_h = use_h #  True
+        self.use_w = use_w # True
+        self.rotate = rotate # 1
+        self.offset = offset # False
+        self.ratio = ratio # 0.5
+        self.mode = mode # 1
+        self.st_prob = prob # 0.7
+        self.prob = prob # 0.7
         self.epoch = None
         self.max_epoch = max_epoch
         self.fixed_prob = fixed_prob
@@ -194,20 +197,20 @@ class GridMask:
         if np.random.rand() > self.prob:
             return results
         imgs = results["img"]
-        h = imgs[0].shape[0]
-        w = imgs[0].shape[1]
+        h = imgs[0].shape[0] # 928
+        w = imgs[0].shape[1] # 1600
         self.d1 = 2
         self.d2 = min(h, w)
-        hh = int(1.5 * h)
-        ww = int(1.5 * w)
-        d = np.random.randint(self.d1, self.d2)
+        hh = int(1.5 * h) # 1392
+        ww = int(1.5 * w) # 2400
+        d = np.random.randint(self.d1, self.d2) # eg:825
         if self.ratio == 1:
             self.l = np.random.randint(1, d)
         else:
             self.l = min(max(int(d * self.ratio + 0.5), 1), d - 1)
-        mask = np.ones((hh, ww), np.float32)
-        st_h = np.random.randint(d)
-        st_w = np.random.randint(d)
+        mask = np.ones((hh, ww), np.float32)  # (1392, 2400)
+        st_h = np.random.randint(d) # 788
+        st_w = np.random.randint(d) # 591
         if self.use_h:
             for i in range(hh // d):
                 s = d * i + st_h
@@ -222,15 +225,15 @@ class GridMask:
         r = np.random.randint(self.rotate)
         mask = Image.fromarray(np.uint8(mask))
         mask = mask.rotate(r)
-        mask = np.asarray(mask)
+        mask = np.asarray(mask) # (1392, 2400)
         mask = mask[
             (hh - h) // 2 : (hh - h) // 2 + h, (ww - w) // 2 : (ww - w) // 2 + w
-        ]
+        ] # (928, 1600)
 
         mask = mask.astype(np.float32)
         mask = mask[:, :, None]
         if self.mode == 1:
-            mask = 1 - mask
+            mask = 1 - mask # (928, 1600)
 
         # mask = mask.expand_as(imgs[0])
         if self.offset:
@@ -238,7 +241,7 @@ class GridMask:
             offset = (1 - mask) * offset
             imgs = [x * mask + offset for x in imgs]
         else:
-            imgs = [x * mask for x in imgs]
+            imgs = [x * mask for x in imgs] # 逐张图片处理
 
         results.update(img=imgs)
         return results
@@ -284,13 +287,13 @@ class ObjectPaste:
     """
 
     def __init__(self, db_sampler, sample_2d=False, stop_epoch=None):
-        self.sampler_cfg = db_sampler
-        self.sample_2d = sample_2d
+        self.sampler_cfg = db_sampler # datasampler的配置文件
+        self.sample_2d = sample_2d # False
         if "type" not in db_sampler.keys():
             db_sampler["type"] = "DataBaseSampler"
-        self.db_sampler = build_from_cfg(db_sampler, OBJECTSAMPLERS)
+        self.db_sampler = build_from_cfg(db_sampler, OBJECTSAMPLERS) # DataBaseSampler
         self.epoch = -1
-        self.stop_epoch = stop_epoch
+        self.stop_epoch = stop_epoch # -1
 
     def set_epoch(self, epoch):
         self.epoch = epoch
@@ -318,7 +321,7 @@ class ObjectPaste:
                 in the result dict.
         """
         if self.stop_epoch is not None and self.epoch >= self.stop_epoch:
-            return data
+            return data # 在设定的epoch停止ObjectPaste，如果设置为-1，则是不用gt sample
         gt_bboxes_3d = data["gt_bboxes_3d"]
         gt_labels_3d = data["gt_labels_3d"]
 
@@ -333,34 +336,34 @@ class ObjectPaste:
                 gt_labels_3d,
                 gt_bboxes_2d=gt_bboxes_2d,
                 img=img,
-            )
+            ) # 返回的是采样的伪gt，不包括原始gt
         else:
             sampled_dict = self.db_sampler.sample_all(
                 gt_bboxes_3d.tensor.numpy(), gt_labels_3d, img=None
             )
 
         if sampled_dict is not None:
-            sampled_gt_bboxes_3d = sampled_dict["gt_bboxes_3d"]
-            sampled_points = sampled_dict["points"]
-            sampled_gt_labels = sampled_dict["gt_labels_3d"]
+            sampled_gt_bboxes_3d = sampled_dict["gt_bboxes_3d"] # 提取3D box
+            sampled_points = sampled_dict["points"] # 提取采样点云
+            sampled_gt_labels = sampled_dict["gt_labels_3d"] # 提取gt labels
 
-            gt_labels_3d = np.concatenate([gt_labels_3d, sampled_gt_labels], axis=0)
+            gt_labels_3d = np.concatenate([gt_labels_3d, sampled_gt_labels], axis=0) # 拼接gt labels
             gt_bboxes_3d = gt_bboxes_3d.new_box(
                 np.concatenate([gt_bboxes_3d.tensor.numpy(), sampled_gt_bboxes_3d])
-            )
+            ) # 拼接3D box
 
-            points = self.remove_points_in_boxes(points, sampled_gt_bboxes_3d)
+            points = self.remove_points_in_boxes(points, sampled_gt_bboxes_3d) # 移除采样gt box内的点云
             # check the points dimension
-            points = points.cat([sampled_points, points])
+            points = points.cat([sampled_points, points]) # 拼接点云
 
             if self.sample_2d:
-                sampled_gt_bboxes_2d = sampled_dict["gt_bboxes_2d"]
+                sampled_gt_bboxes_2d = sampled_dict["gt_bboxes_2d"] # 获取采样的2D gt box
                 gt_bboxes_2d = np.concatenate(
-                    [gt_bboxes_2d, sampled_gt_bboxes_2d]
+                    [gt_bboxes_2d, sampled_gt_bboxes_2d] # 拼接gt box 2D
                 ).astype(np.float32)
 
                 data["gt_bboxes"] = gt_bboxes_2d
-                data["img"] = sampled_dict["img"]
+                data["img"] = sampled_dict["img"] # 记录贴图后的图片
 
         data["gt_bboxes_3d"] = gt_bboxes_3d
         data["gt_labels_3d"] = gt_labels_3d.astype(np.long)

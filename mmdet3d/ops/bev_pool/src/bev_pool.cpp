@@ -25,9 +25,10 @@ at::Tensor bev_pool_forward(
   const at::Tensor _interval_starts,
   int b, int d, int h, int w
 ) {
-  int n = _x.size(0);
-  int c = _x.size(1);
-  int n_intervals = _interval_lengths.size(0);
+  int n = _x.size(0); // 3666928
+  int c = _x.size(1); // 80
+  int n_intervals = _interval_lengths.size(0); // (203770,)
+  // 初始化输入Tensor数据指针
   const float* x = _x.data_ptr<float>();
   const int* geom_feats = _geom_feats.data_ptr<int>();
   const int* interval_lengths = _interval_lengths.data_ptr<int>();
@@ -35,7 +36,9 @@ at::Tensor bev_pool_forward(
   
   auto options =
       torch::TensorOptions().dtype(_x.dtype()).device(_x.device());
+  // 定义输出Tensor
   at::Tensor _out = torch::zeros({b, d, h, w, c}, options);
+  // 定义输出Tensor数据指针
   float* out = _out.data_ptr<float>();
   bev_pool(
     b, d, h, w, n, c, n_intervals, x,

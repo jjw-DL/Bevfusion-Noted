@@ -4,18 +4,18 @@
 /*
   Function: pillar pooling
   Args:
-    b                : batch size
-    d                : depth of the feature map
-    h                : height of pooled feature map
-    w                : width of pooled feature map
-    n                : number of input points
-    c                : number of channels
-    n_intervals      : number of unique points
-    x                : input features, FloatTensor[n, c]
-    geom_feats       : input coordinates, IntTensor[n, 4]
-    interval_lengths : starting position for pooled point, IntTensor[n_intervals]
-    interval_starts  : how many points in each pooled point, IntTensor[n_intervals]
-    out              : output features, FloatTensor[b, d, h, w, c]
+    b                : batch size 2
+    d                : depth of the feature map 1
+    h                : height of pooled feature map 360
+    w                : width of pooled feature map 360
+    n                : number of input points 3666928
+    c                : number of channels 80
+    n_intervals      : number of unique points 203770
+    x                : input features, FloatTensor[n, c] (3666928, 80)
+    geom_feats       : input coordinates, IntTensor[n, 4] (3666928, 4)
+    interval_lengths : starting position for pooled point, IntTensor[n_intervals] (203770,)
+    interval_starts  : how many points in each pooled point, IntTensor[n_intervals] (203770,)
+    out              : output features, FloatTensor[b, d, h, w, c] (2, 1, 360, 360, 80)
 */
 __global__ void bev_pool_kernel(int b, int d, int h, int w, int n, int c, int n_intervals,
                                   const float *__restrict__ x,
@@ -23,22 +23,24 @@ __global__ void bev_pool_kernel(int b, int d, int h, int w, int n, int c, int n_
                                   const int *__restrict__ interval_starts,
                                   const int *__restrict__ interval_lengths,
                                   float* __restrict__ out) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int index = idx / c;
-  int cur_c = idx % c;
-  if (index >= n_intervals) return;
-  int interval_start = interval_starts[index];
-  int interval_length = interval_lengths[index];
-  const int* cur_geom_feats = geom_feats + interval_start * 4;
-  const float* cur_x = x + interval_start * c + cur_c;
+  // 一维矩阵一维块
+  int idx = blockIdx.x * blockDim.x + threadIdx.x; // 计算该线程索引，一个线程负责一个点一个特征维度的计算
+  int index = idx / c; // 计算该线程对应的行索引，点索引
+  int cur_c = idx % c; // 计算该线程对应的列索引，特征索引
+  if (index >= n_intervals) return; // 如果索引 >= pillar数，则直接返回
+  int interval_start = interval_starts[index]; // 通过点索引取出pillar对应的起始位置
+  int interval_length = interval_lengths[index]; // 取出该pillar内点的数量
+  const int* cur_geom_feats = geom_feats + interval_start * 4; // 通过指针找到几何特征位置
+  const float* cur_x = x + interval_start * c + cur_c; // 通过指针计算上下文特征的起始位置
+  // cur_geom_feats：(h, w, d, b)
   float* cur_out = out + cur_geom_feats[3] * d * h * w * c + 
     cur_geom_feats[2] * h * w * c + cur_geom_feats[0] * w * c + 
-    cur_geom_feats[1] * c + cur_c;
+    cur_geom_feats[1] * c + cur_c; // 计算输出指针(都被展开成一维索引)
   float psum = 0;
   for(int i = 0; i < interval_length; i++){
-    psum += cur_x[i * c];
+    psum += cur_x[i * c]; // 累加pillar内所有点的第c维上下文特征
   }
-  *cur_out = psum;
+  *cur_out = psum; // 将该特征赋予到对应位置
 }
 
 
@@ -64,21 +66,22 @@ __global__ void bev_pool_grad_kernel(int b, int d, int h, int w, int n, int c, i
                                   const int *__restrict__ interval_starts,
                                   const int *__restrict__ interval_lengths,
                                   float* __restrict__ x_grad) {
+  // 一维矩阵一维块
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int index = idx / c;
-  int cur_c = idx % c;
-  if (index >= n_intervals) return;
-  int interval_start = interval_starts[index];
-  int interval_length = interval_lengths[index];
+  int index = idx / c; // 计算该线程对应的行索引，点索引
+  int cur_c = idx % c; // 计算该线程对应的列索引，特征索引
+  if (index >= n_intervals) return; // 如果索引 >= pillar数，则直接返回
+  int interval_start = interval_starts[index]; // 通过点索引取出pillar对应的起始位置
+  int interval_length = interval_lengths[index]; // 取出该pillar内点的数量
   
-  const int* cur_geom_feats = geom_feats + interval_start * 4;
-  float* cur_x_grad = x_grad + interval_start * c + cur_c;
+  const int* cur_geom_feats = geom_feats + interval_start * 4; // 通过指针找到几何特征位置
+  float* cur_x_grad = x_grad + interval_start * c + cur_c; // 通过指针计算上下文特征的起始位置
   
   const float* cur_out_grad = out_grad + cur_geom_feats[3] * d * h * w * c + 
     cur_geom_feats[2] * h * w * c + cur_geom_feats[0] * w * c + 
-    cur_geom_feats[1] * c + cur_c;
+    cur_geom_feats[1] * c + cur_c; // 提取该特征对应的梯度的起始指针
   for(int i = 0; i < interval_length; i++){
-    cur_x_grad[i * c] = *cur_out_grad;
+    cur_x_grad[i * c] = *cur_out_grad; // 赋值pillar内所有点的梯度(相同)
   }
   
 }

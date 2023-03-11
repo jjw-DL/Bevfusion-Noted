@@ -9,6 +9,6 @@ class CustomEpochBasedRunner(EpochBasedRunner):
 
     def train(self, data_loader, **kwargs):
         # update the schedule for data augmentation
-        for dataset in self._dataset:
-            dataset.set_epoch(self.epoch)
+        for dataset in self._dataset: # CBGSDataset
+            dataset.set_epoch(self.epoch) # 0
         super().train(data_loader, **kwargs)

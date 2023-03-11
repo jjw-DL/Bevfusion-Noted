@@ -33,25 +33,25 @@ class BEVFusion(Base3DFusionModel):
         super().__init__()
 
         self.encoders = nn.ModuleDict()
-        if encoders.get("camera") is not None:
+        if encoders.get("camera") is not None: # 构建camera的encoder
             self.encoders["camera"] = nn.ModuleDict(
                 {
-                    "backbone": build_backbone(encoders["camera"]["backbone"]),
-                    "neck": build_neck(encoders["camera"]["neck"]),
+                    "backbone": build_backbone(encoders["camera"]["backbone"]), # 构建backbone, swin transformer
+                    "neck": build_neck(encoders["camera"]["neck"]), # 
                     "vtransform": build_vtransform(encoders["camera"]["vtransform"]),
                 }
             )
-        if encoders.get("lidar") is not None:
+        if encoders.get("lidar") is not None: # 构建lidar的encoder
             self.encoders["lidar"] = nn.ModuleDict(
                 {
                     "voxelize": Voxelization(**encoders["lidar"]["voxelize"]),
                     "backbone": build_backbone(encoders["lidar"]["backbone"]),
                 }
             )
-            self.voxelize_reduce = encoders["lidar"].get("voxelize_reduce", True)
+            self.voxelize_reduce = encoders["lidar"].get("voxelize_reduce", True) # True
 
         if fuser is not None:
-            self.fuser = build_fuser(fuser)
+            self.fuser = build_fuser(fuser) # 构建融合层
         else:
             self.fuser = None
 
@@ -60,11 +60,11 @@ class BEVFusion(Base3DFusionModel):
                 "backbone": build_backbone(decoder["backbone"]),
                 "neck": build_neck(decoder["neck"]),
             }
-        )
+        ) # 构建lidar的decoder
         self.heads = nn.ModuleDict()
         for name in heads:
             if heads[name] is not None:
-                self.heads[name] = build_head(heads[name])
+                self.heads[name] = build_head(heads[name]) # 构建head-->transfusion Head
 
         if "loss_scale" in kwargs:
             self.loss_scale = kwargs["loss_scale"]
@@ -74,7 +74,7 @@ class BEVFusion(Base3DFusionModel):
                 if heads[name] is not None:
                     self.loss_scale[name] = 1.0
 
-        self.init_weights()
+        self.init_weights() # 权重初始化
 
     def init_weights(self) -> None:
         if "camera" in self.encoders:
@@ -93,17 +93,17 @@ class BEVFusion(Base3DFusionModel):
         lidar_aug_matrix,
         img_metas,
     ) -> torch.Tensor:
-        B, N, C, H, W = x.size()
-        x = x.view(B * N, C, H, W)
+        B, N, C, H, W = x.size() # (2, 6, 3, 256, 704)
+        x = x.view(B * N, C, H, W) # 将batch和图片数量合并 --> # (12, 3, 256, 704)
 
-        x = self.encoders["camera"]["backbone"](x)
-        x = self.encoders["camera"]["neck"](x)
+        x = self.encoders["camera"]["backbone"](x) # (12, 192, 32, 88)和(12, 384, 16, 44)和(12, 768, 8, 22)
+        x = self.encoders["camera"]["neck"](x) # ((12, 256, 32, 88)和(12, 256, 16, 44))
 
         if not isinstance(x, torch.Tensor):
-            x = x[0]
+            x = x[0] # (12, 256, 32, 88)
 
-        BN, C, H, W = x.size()
-        x = x.view(B, int(BN / B), C, H, W)
+        BN, C, H, W = x.size() # 12, 256, 32, 88
+        x = x.view(B, int(BN / B), C, H, W) # (2, 6, 256, 32, 88)
 
         x = self.encoders["camera"]["vtransform"](
             x,
@@ -116,32 +116,40 @@ class BEVFusion(Base3DFusionModel):
             img_aug_matrix,
             lidar_aug_matrix,
             img_metas,
-        )
-        return x
+        ) # (2, 80, 180, 180)
+        return x # (2, 80, 180, 180)
 
     def extract_lidar_features(self, x) -> torch.Tensor:
+        # x:List(tensor)
+        # feats: (190773, 5)
+        # coords: (190773, 4)
+        # sizes:(190773,)
         feats, coords, sizes = self.voxelize(x)
-        batch_size = coords[-1, 0] + 1
-        x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes)
+        batch_size = coords[-1, 0] + 1 # 计算batch size:2
+        x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes) # (2, 256, 180, 180)
         return x
 
     @torch.no_grad()
     @force_fp32()
     def voxelize(self, points):
         feats, coords, sizes = [], [], []
+        # 逐帧点云处理
         for k, res in enumerate(points):
+            # f:(72517, 10, 5)
+            # c:(72517, 3)
+            # n:(72517,)
             f, c, n = self.encoders["lidar"]["voxelize"](res)
-            feats.append(f)
-            coords.append(F.pad(c, (1, 0), mode="constant", value=k))
-            sizes.append(n)
+            feats.append(f) # (72517, 10, 5)
+            coords.append(F.pad(c, (1, 0), mode="constant", value=k)) # eg:(72517, 4)
+            sizes.append(n) # (72517,)
 
-        feats = torch.cat(feats, dim=0)
-        coords = torch.cat(coords, dim=0)
-        sizes = torch.cat(sizes, dim=0)
+        feats = torch.cat(feats, dim=0) # (190773, 10, 5)
+        coords = torch.cat(coords, dim=0) # (190773, 4) batch id在第一维
+        sizes = torch.cat(sizes, dim=0) # 190773
 
         if self.voxelize_reduce:
-            feats = feats.sum(dim=1, keepdim=False) / sizes.type_as(feats).view(-1, 1)
-            feats = feats.contiguous()
+            feats = feats.sum(dim=1, keepdim=False) / sizes.type_as(feats).view(-1, 1) # (190773, 5)
+            feats = feats.contiguous() # (190773, 5)
 
         return feats, coords, sizes
 
@@ -164,6 +172,7 @@ class BEVFusion(Base3DFusionModel):
         **kwargs,
     ):
         features = []
+        # 特征提取
         for sensor in self.encoders:
             if sensor == "camera":
                 feature = self.extract_camera_features(
@@ -177,23 +186,23 @@ class BEVFusion(Base3DFusionModel):
                     img_aug_matrix,
                     lidar_aug_matrix,
                     metas,
-                )
+                ) # (2, 80, 180, 180)
             elif sensor == "lidar":
-                feature = self.extract_lidar_features(points)
+                feature = self.extract_lidar_features(points) #  (2, 256, 180, 180)
             else:
                 raise ValueError(f"unsupported sensor: {sensor}")
             features.append(feature)
 
         if self.fuser is not None:
-            x = self.fuser(features)
+            x = self.fuser(features) # (2, 256, 180, 180)
         else:
             assert len(features) == 1, features
             x = features[0]
 
-        batch_size = x.shape[0]
+        batch_size = x.shape[0] # 2
 
-        x = self.decoder["backbone"](x)
-        x = self.decoder["neck"](x)
+        x = self.decoder["backbone"](x) # (2, 128, 180, 180)和(2, 256, 90, 90)
+        x = self.decoder["neck"](x) # [(2, 512, 180, 180)]
 
         if self.training:
             outputs = {}

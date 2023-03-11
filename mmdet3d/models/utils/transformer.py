@@ -19,14 +19,14 @@ class PositionEmbeddingLearned(nn.Module):
     def __init__(self, input_channel, num_pos_feats=288):
         super().__init__()
         self.position_embedding_head = nn.Sequential(
-            nn.Conv1d(input_channel, num_pos_feats, kernel_size=1),
-            nn.BatchNorm1d(num_pos_feats),
+            nn.Conv1d(input_channel, num_pos_feats, kernel_size=1), # 2 --> 128
+            nn.BatchNorm1d(num_pos_feats), # 128
             nn.ReLU(inplace=True),
-            nn.Conv1d(num_pos_feats, num_pos_feats, kernel_size=1))
+            nn.Conv1d(num_pos_feats, num_pos_feats, kernel_size=1)) # 128 --> 128
 
     def forward(self, xyz):
-        xyz = xyz.transpose(1, 2).contiguous()
-        position_embedding = self.position_embedding_head(xyz)
+        xyz = xyz.transpose(1, 2).contiguous() # (2, 2, 200)
+        position_embedding = self.position_embedding_head(xyz) # (2, 128, 200)
         return position_embedding
 
 
@@ -36,19 +36,19 @@ class TransformerDecoderLayer(nn.Module):
         super().__init__()
         self.cross_only = cross_only
         if not self.cross_only:
-            self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
+            self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout) # 多头注意力机制 self attention
+        self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout) #  cross attention
         # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.linear1 = nn.Linear(d_model, dim_feedforward) # 128-->256
+        self.dropout = nn.Dropout(dropout) # 0.1
+        self.linear2 = nn.Linear(dim_feedforward, d_model) # 256-->128
 
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-        self.dropout3 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model) # 128
+        self.norm2 = nn.LayerNorm(d_model) # 128
+        self.norm3 = nn.LayerNorm(d_model) # 128
+        self.dropout1 = nn.Dropout(dropout) # 0.1
+        self.dropout2 = nn.Dropout(dropout) # 0.1
+        self.dropout3 = nn.Dropout(dropout) # 0.1
 
         def _get_activation_fn(activation):
             """Return an activation function given a string"""
@@ -60,10 +60,10 @@ class TransformerDecoderLayer(nn.Module):
                 return F.glu
             raise RuntimeError(F"activation should be relu/gelu, not {activation}.")
 
-        self.activation = _get_activation_fn(activation)
+        self.activation = _get_activation_fn(activation) # relu
 
-        self.self_posembed = self_posembed
-        self.cross_posembed = cross_posembed
+        self.self_posembed = self_posembed # 2-->128-->128
+        self.cross_posembed = cross_posembed # 2-->128-->128
 
     def with_pos_embed(self, tensor, pos_embed):
         return tensor if pos_embed is None else tensor + pos_embed
@@ -79,35 +79,36 @@ class TransformerDecoderLayer(nn.Module):
         """
         # NxCxP to PxNxC
         if self.self_posembed is not None:
-            query_pos_embed = self.self_posembed(query_pos).permute(2, 0, 1)
+            query_pos_embed = self.self_posembed(query_pos).permute(2, 0, 1) # (2, 200, 2)-->(2, 200, 128)-->(200, 2, 128)
         else:
             query_pos_embed = None
         if self.cross_posembed is not None:
-            key_pos_embed = self.cross_posembed(key_pos).permute(2, 0, 1)
+            key_pos_embed = self.cross_posembed(key_pos).permute(2, 0, 1) # (2, 32400, 2)-->(2, 32400, 128)-->(32400, 2, 128)
         else:
             key_pos_embed = None
 
-        query = query.permute(2, 0, 1)
-        key = key.permute(2, 0, 1)
+        query = query.permute(2, 0, 1) # (2, 128, 200) --> (200, 2, 128)
+        key = key.permute(2, 0, 1) # (2, 128, 32400) --> (32400, 2, 128)
 
+        # query的self attention, query first
         if not self.cross_only:
-            q = k = v = self.with_pos_embed(query, query_pos_embed)
-            query2 = self.self_attn(q, k, value=v)[0]
+            q = k = v = self.with_pos_embed(query, query_pos_embed) # (200, 2, 128) 在embed token中嵌入pos embed
+            query2 = self.self_attn(q, k, value=v)[0] # 自注意力 （200, 2, 128）
             query = query + self.dropout1(query2)
             query = self.norm1(query)
-
+        # cross attention
         query2 = self.multihead_attn(query=self.with_pos_embed(query, query_pos_embed),
                                      key=self.with_pos_embed(key, key_pos_embed),
-                                     value=self.with_pos_embed(key, key_pos_embed), attn_mask=attn_mask)[0]
-        query = query + self.dropout2(query2)
-        query = self.norm2(query)
-
+                                     value=self.with_pos_embed(key, key_pos_embed), attn_mask=attn_mask)[0] # (200, 2, 128)
+        query = query + self.dropout2(query2) # (200, 2, 128)
+        query = self.norm2(query) # (200, 2, 128)
+        # FFN
         query2 = self.linear2(self.dropout(self.activation(self.linear1(query))))
         query = query + self.dropout3(query2)
         query = self.norm3(query)
 
         # NxCxP to PxNxC
-        query = query.permute(1, 2, 0)
+        query = query.permute(1, 2, 0) # (200, 2, 128) --> (2, 128, 200)
         return query
 
 
@@ -138,17 +139,17 @@ class MultiheadAttention(nn.Module):
     def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False, kdim=None,
                  vdim=None):
         super(MultiheadAttention, self).__init__()
-        self.embed_dim = embed_dim
-        self.kdim = kdim if kdim is not None else embed_dim
-        self.vdim = vdim if vdim is not None else embed_dim
-        self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
+        self.embed_dim = embed_dim # 128
+        self.kdim = kdim if kdim is not None else embed_dim # 128
+        self.vdim = vdim if vdim is not None else embed_dim # 128
+        self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim # True
 
-        self.num_heads = num_heads
-        self.dropout = dropout
-        self.head_dim = embed_dim // num_heads
+        self.num_heads = num_heads # 8
+        self.dropout = dropout # 0.1
+        self.head_dim = embed_dim // num_heads # 16
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
-        self.in_proj_weight = Parameter(torch.empty(3 * embed_dim, embed_dim))
+        self.in_proj_weight = Parameter(torch.empty(3 * embed_dim, embed_dim)) # 初始化为(3*128, 128)
 
         if self._qkv_same_embed_dim is False:
             self.q_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
@@ -156,12 +157,12 @@ class MultiheadAttention(nn.Module):
             self.v_proj_weight = Parameter(torch.Tensor(embed_dim, self.vdim))
 
         if bias:
-            self.in_proj_bias = Parameter(torch.empty(3 * embed_dim))
+            self.in_proj_bias = Parameter(torch.empty(3 * embed_dim)) # (384,)
         else:
             self.register_parameter('in_proj_bias', None)
-        self.out_proj = Linear(embed_dim, embed_dim, bias=bias)
+        self.out_proj = Linear(embed_dim, embed_dim, bias=bias) # (128, 128)
 
-        if add_bias_kv:
+        if add_bias_kv: # False
             self.bias_k = Parameter(torch.empty(1, 1, embed_dim))
             self.bias_v = Parameter(torch.empty(1, 1, embed_dim))
         else:
@@ -172,7 +173,7 @@ class MultiheadAttention(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self):
-        if self._qkv_same_embed_dim:
+        if self._qkv_same_embed_dim: # True
             xavier_uniform_(self.in_proj_weight)
         else:
             xavier_uniform_(self.q_proj_weight)
@@ -182,9 +183,9 @@ class MultiheadAttention(nn.Module):
         if self.in_proj_bias is not None:
             constant_(self.in_proj_bias, 0.)
             constant_(self.out_proj.bias, 0.)
-        if self.bias_k is not None:
+        if self.bias_k is not None: # None
             xavier_normal_(self.bias_k)
-        if self.bias_v is not None:
+        if self.bias_v is not None: # None
             xavier_normal_(self.bias_v)
 
     def forward(self, query, key, value, key_padding_mask=None, need_weights=True, attn_mask=None):

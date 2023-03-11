@@ -220,22 +220,22 @@ class NuScenesDataset(Custom3DDataset):
 
         # ego to global transform
         ego2global = np.eye(4).astype(np.float32)
-        ego2global[:3, :3] = Quaternion(info["ego2global_rotation"]).rotation_matrix
-        ego2global[:3, 3] = info["ego2global_translation"]
+        ego2global[:3, :3] = Quaternion(info["ego2global_rotation"]).rotation_matrix # 自车到全局的旋转
+        ego2global[:3, 3] = info["ego2global_translation"] # 自车到全局的平移
         data["ego2global"] = ego2global
 
         # lidar to ego transform
         lidar2ego = np.eye(4).astype(np.float32)
-        lidar2ego[:3, :3] = Quaternion(info["lidar2ego_rotation"]).rotation_matrix
-        lidar2ego[:3, 3] = info["lidar2ego_translation"]
+        lidar2ego[:3, :3] = Quaternion(info["lidar2ego_rotation"]).rotation_matrix # lidar到自车的旋转
+        lidar2ego[:3, 3] = info["lidar2ego_translation"] # lidar到自车的平移
         data["lidar2ego"] = lidar2ego
 
         if self.modality["use_camera"]:
-            data["image_paths"] = []
-            data["lidar2camera"] = []
-            data["lidar2image"] = []
-            data["camera2ego"] = []
-            data["camera_intrinsics"] = []
+            data["image_paths"] = [] # 相机图片路径
+            data["lidar2camera"] = [] # lidar到camera的变换矩阵
+            data["lidar2image"] = [] # lidar到image的变换矩阵
+            data["camera2ego"] = [] # 相机到自车的变换矩阵
+            data["camera_intrinsics"] = [] # 相机内参
 
             for _, camera_info in info["cams"].items():
                 data["image_paths"].append(camera_info["data_path"])

@@ -25,10 +25,10 @@ class SECOND(BaseModule):
 
     def __init__(
         self,
-        in_channels=128,
-        out_channels=[128, 128, 256],
-        layer_nums=[3, 5, 5],
-        layer_strides=[2, 2, 2],
+        in_channels=128, # 256
+        out_channels=[128, 128, 256], # [128, 256]
+        layer_nums=[3, 5, 5], # [5, 5]
+        layer_strides=[2, 2, 2], # [1, 2]
         norm_cfg=dict(type="BN", eps=1e-3, momentum=0.01),
         conv_cfg=dict(type="Conv2d", bias=False),
         init_cfg=None,
@@ -38,7 +38,7 @@ class SECOND(BaseModule):
         assert len(layer_strides) == len(layer_nums)
         assert len(out_channels) == len(layer_nums)
 
-        in_filters = [in_channels, *out_channels[:-1]]
+        in_filters = [in_channels, *out_channels[:-1]] # 计算每一个block的起始输入channle[256, 128]
         # note that when stride > 1, conv2d with same padding isn't
         # equal to pad-conv2d. we should use pad-conv2d.
         blocks = []
@@ -46,15 +46,16 @@ class SECOND(BaseModule):
             block = [
                 build_conv_layer(
                     conv_cfg,
-                    in_filters[i],
-                    out_channels[i],
+                    in_filters[i], # 256, 128
+                    out_channels[i], # 128, 256
                     3,
-                    stride=layer_strides[i],
-                    padding=1,
+                    stride=layer_strides[i], # 1, 2
+                    padding=1, # 构建conv层
                 ),
-                build_norm_layer(norm_cfg, out_channels[i])[1],
+                build_norm_layer(norm_cfg, out_channels[i])[1], # 这里取1的原因是返回值有两个一个是name，一个是layer
                 nn.ReLU(inplace=True),
             ]
+            # 按照配置文件构建n个输入输出相同的层
             for j in range(layer_num):
                 block.append(
                     build_conv_layer(
@@ -85,13 +86,14 @@ class SECOND(BaseModule):
         """Forward function.
 
         Args:
-            x (torch.Tensor): Input with shape (N, C, H, W).
+            x (torch.Tensor): Input with shape (N, C, H, W). (2, 256, 180, 180)
 
         Returns:
             tuple[torch.Tensor]: Multi-scale features.
         """
         outs = []
         for i in range(len(self.blocks)):
+            # (2, 128, 180, 180)和(2, 256, 90, 90)
             x = self.blocks[i](x)
             outs.append(x)
-        return tuple(outs)
+        return tuple(outs) # (2, 128, 180, 180)和(2, 256, 90, 90)
